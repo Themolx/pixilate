@@ -53,7 +53,7 @@ function CameraView({ session, onBack }: { session: string; onBack: () => void }
     setLoading(false)
   }, [session])
 
-  // Start camera
+  // Start camera (separate from loadFrames to avoid stream leak on re-render)
   useEffect(() => {
     let mounted = true
     async function startCamera() {
@@ -66,18 +66,25 @@ function CameraView({ session, onBack }: { session: string; onBack: () => void }
           videoRef.current.srcObject = stream
           streamRef.current = stream
           videoRef.current.onloadeddata = () => setCameraReady(true)
+        } else {
+          stream.getTracks().forEach(t => t.stop())
         }
       } catch (err) {
         console.error('Camera error:', err)
+        setStatus('Camera error - check permissions')
       }
     }
     startCamera()
-    loadFrames()
 
     return () => {
       mounted = false
       streamRef.current?.getTracks().forEach(t => t.stop())
     }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Initial frame load
+  useEffect(() => {
+    loadFrames()
   }, [loadFrames])
 
   // Poll for new frames every 5s
@@ -131,13 +138,31 @@ function CameraView({ session, onBack }: { session: string; onBack: () => void }
 
     images.forEach((img, i) => {
       const layerOpacity = opacity * ((i + 1) / images.length)
-      ctx.globalAlpha = layerOpacity
+
+      // Draw image to an offscreen canvas, then tint it green
+      const off = document.createElement('canvas')
+      off.width = canvas.width
+      off.height = canvas.height
+      const offCtx = off.getContext('2d')!
+
       const scale = Math.max(canvas.width / img.width, canvas.height / img.height)
       const w = img.width * scale
       const h = img.height * scale
       const x = (canvas.width - w) / 2
       const y = (canvas.height - h) / 2
-      ctx.drawImage(img, x, y, w, h)
+
+      // Draw the frame
+      offCtx.drawImage(img, x, y, w, h)
+
+      // Green tint overlay using multiply blend
+      offCtx.globalCompositeOperation = 'multiply'
+      offCtx.fillStyle = '#44ff88'
+      offCtx.fillRect(0, 0, off.width, off.height)
+      offCtx.globalCompositeOperation = 'source-over'
+
+      // Draw tinted frame onto main canvas with opacity
+      ctx.globalAlpha = layerOpacity
+      ctx.drawImage(off, 0, 0)
     })
     ctx.globalAlpha = 1
   }
@@ -191,13 +216,21 @@ function CameraView({ session, onBack }: { session: string; onBack: () => void }
     }
   }
 
+  // Guard playbackIdx if frames change while playing
+  useEffect(() => {
+    if (playbackIdx >= framePaths.length && framePaths.length > 0) {
+      setPlaybackIdx(framePaths.length - 1)
+    }
+  }, [framePaths.length, playbackIdx])
+
   // Playback
   useEffect(() => {
     if (!playing || !showPlayback || framePaths.length === 0) return
+    const len = framePaths.length
     const interval = setInterval(() => {
       setPlaybackIdx(prev => {
         const next = prev + 1
-        if (next >= framePaths.length) {
+        if (next >= len) {
           setPlaying(false)
           return 0
         }
@@ -294,15 +327,20 @@ function CameraView({ session, onBack }: { session: string; onBack: () => void }
 
       {framePaths.length > 0 && (
         <div className="timeline">
-          {framePaths.map((p, i) => (
-            <img
-              key={p}
-              src={getFrameUrl(p)}
-              className={`timeline-thumb ${i === framePaths.length - 1 ? 'current' : ''}`}
-              crossOrigin="anonymous"
-              alt=""
-            />
-          ))}
+          {framePaths.slice(-30).map((p, _i) => {
+            const realIdx = framePaths.length - 30 + _i
+            const idx = realIdx < 0 ? _i : realIdx
+            return (
+              <img
+                key={p}
+                src={getFrameUrl(p)}
+                className={`timeline-thumb ${idx === framePaths.length - 1 ? 'current' : ''}`}
+                crossOrigin="anonymous"
+                alt=""
+                loading="lazy"
+              />
+            )
+          })}
         </div>
       )}
     </div>
