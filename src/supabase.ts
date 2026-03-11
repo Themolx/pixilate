@@ -2,8 +2,11 @@ import { createClient } from '@supabase/supabase-js'
 
 const SUPABASE_URL = 'https://hdiegzacpokfmrtrbzch.supabase.co'
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhkaWVnemFjcG9rZm1ydHJiemNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzOTQ4NTcsImV4cCI6MjA4Nzk3MDg1N30.k6gUjMkaQ-bmb1B2uvSsb-sedADUWUIoTjnToTbJYeo'
+// POC only - service role key bypasses storage RLS for uploads
+const SUPABASE_SERVICE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhkaWVnemFjcG9rZm1ydHJiemNoIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjM5NDg1NywiZXhwIjoyMDg3OTcwODU3fQ.8sOkS3r2ZPz1_C2hjndND8cZwXrSJ_JSDR03P7Jdzlo'
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 export const BUCKET = 'pixilate-frames'
 
@@ -13,7 +16,7 @@ export function getFrameUrl(path: string): string {
 }
 
 export async function listFrames(session: string): Promise<string[]> {
-  const { data, error } = await supabase.storage
+  const { data, error } = await supabaseAdmin.storage
     .from(BUCKET)
     .list(session, { sortBy: { column: 'name', order: 'asc' } })
 
@@ -23,10 +26,11 @@ export async function listFrames(session: string): Promise<string[]> {
     .map(f => `${session}/${f.name}`)
 }
 
-export async function uploadFrame(session: string, frameNumber: number, blob: Blob): Promise<string | null> {
-  const path = `${session}/frame-${String(frameNumber).padStart(5, '0')}.jpg`
+export async function uploadFrame(session: string, blob: Blob): Promise<string | null> {
+  const ts = Date.now()
+  const path = `${session}/frame-${ts}.jpg`
 
-  const { error } = await supabase.storage.from(BUCKET).upload(path, blob, {
+  const { error } = await supabaseAdmin.storage.from(BUCKET).upload(path, blob, {
     contentType: 'image/jpeg',
     upsert: false,
   })

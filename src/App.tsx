@@ -41,6 +41,9 @@ function CameraView({ session, onBack }: { session: string; onBack: () => void }
   const [showPlayback, setShowPlayback] = useState(false)
   const [playbackIdx, setPlaybackIdx] = useState(0)
   const [playing, setPlaying] = useState(false)
+  const [status, setStatus] = useState('')
+  const [cameraReady, setCameraReady] = useState(false)
+  const [flash, setFlash] = useState(false)
   const streamRef = useRef<MediaStream | null>(null)
 
   // Load existing frames
@@ -62,6 +65,7 @@ function CameraView({ session, onBack }: { session: string; onBack: () => void }
         if (mounted && videoRef.current) {
           videoRef.current.srcObject = stream
           streamRef.current = stream
+          videoRef.current.onloadeddata = () => setCameraReady(true)
         }
       } catch (err) {
         console.error('Camera error:', err)
@@ -143,25 +147,48 @@ function CameraView({ session, onBack }: { session: string; onBack: () => void }
     const video = videoRef.current
     if (!video || capturing) return
 
-    setCapturing(true)
-
-    const tempCanvas = document.createElement('canvas')
-    tempCanvas.width = video.videoWidth
-    tempCanvas.height = video.videoHeight
-    const ctx = tempCanvas.getContext('2d')!
-    ctx.drawImage(video, 0, 0)
-
-    const blob = await new Promise<Blob>((resolve) => {
-      tempCanvas.toBlob(b => resolve(b!), 'image/jpeg', 0.85)
-    })
-
-    const nextNumber = framePaths.length + 1
-    const path = await uploadFrame(session, nextNumber, blob)
-
-    if (path) {
-      await loadFrames()
+    if (!cameraReady || video.videoWidth === 0 || video.videoHeight === 0) {
+      setStatus('Camera not ready yet...')
+      setTimeout(() => setStatus(''), 2000)
+      return
     }
-    setCapturing(false)
+
+    setCapturing(true)
+    setStatus('Capturing...')
+
+    try {
+      const tempCanvas = document.createElement('canvas')
+      tempCanvas.width = video.videoWidth
+      tempCanvas.height = video.videoHeight
+      const ctx = tempCanvas.getContext('2d')
+      if (!ctx) throw new Error('Could not get canvas context')
+      ctx.drawImage(video, 0, 0)
+
+      const blob = await new Promise<Blob | null>((resolve) => {
+        tempCanvas.toBlob(b => resolve(b), 'image/jpeg', 0.85)
+      })
+
+      if (!blob) throw new Error('Failed to create image blob')
+
+      setFlash(true)
+      setTimeout(() => setFlash(false), 150)
+
+      setStatus('Uploading...')
+      const path = await uploadFrame(session, blob)
+
+      if (path) {
+        await loadFrames()
+        setStatus('Frame saved!')
+      } else {
+        setStatus('Upload failed!')
+      }
+    } catch (err) {
+      console.error('Capture error:', err)
+      setStatus(`Error: ${err instanceof Error ? err.message : 'Unknown'}`)
+    } finally {
+      setCapturing(false)
+      setTimeout(() => setStatus(''), 2000)
+    }
   }
 
   // Playback
@@ -225,8 +252,12 @@ function CameraView({ session, onBack }: { session: string; onBack: () => void }
         <video ref={videoRef} autoPlay playsInline muted />
         <canvas ref={canvasRef} className="onion-layer" />
 
+        {flash && <div style={{position:'absolute',inset:0,background:'#fff',zIndex:10,pointerEvents:'none'}} />}
+
         <div className="frame-count">
           {framePaths.length} frames • {session}
+          {status && <div style={{marginTop:4,color:'#ff0'}}>{status}</div>}
+          {!cameraReady && <div style={{marginTop:4,color:'#f80'}}>Starting camera...</div>}
         </div>
 
         <div className="onion-control">
